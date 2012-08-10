@@ -1,0 +1,84 @@
+--
+-- step 1. histogram of words.
+--
+
+create temporary function rowSequence as 'org.apache.hadoop.hive.contrib.udf.UDFRowSequence';
+set hive.auto.convert.join=true; -- convert joins as necessary
+set hive.exec.mode.local.auto=true; -- move small jobs to the master node
+
+-- as of August 2012, the first created table (in a Hive EMR session, at least) can't be a "create table as".
+create table tmp (x int);
+
+-- as per http://aws.amazon.com/articles/5249664154115844
+create external table e1grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/1gram/';
+create external table e2grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/2gram/';
+create external table e3grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/3gram/';
+create external table e4grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/4gram/';
+create external table e5grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/5gram/';
+
+create table grams as select g as word, count(*) as freq from (select gram as g from e1grams union all select explode(split(gram," ")) as g from e2grams union all select explode(split(gram," ")) as g from e3grams union all select explode(split(gram," ")) as g from e4grams union all select explode(split(gram," ")) as g from e5grams) x group by g;
+
+create table topgrams as select * from grams order by freq desc limit 500000;
+
+create table words as select word, rowSequence() as id from topgrams;  -- ensure this runs on 1 node only.
+
+-- or create external table words (word string, id int) location 's3://www.leebutterman.com/words';
+
+create view g1t as select gram as atxt, sum(freq) as tot from e1grams where year > 1800 group by gram;
+create view g2t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, sum(freq) as tot from e2grams where year > 1800 group by gram;
+create view g3t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, split(gram," ")[2] as ctxt, sum(freq) as tot from e3grams where year > 1800 group by gram;
+create view g4t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, split(gram," ")[2] as ctxt, split(gram," ")[3] as dtxt, sum(freq) as tot from e4grams where year > 1800 group by gram;
+create view g5t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, split(gram," ")[2] as ctxt, split(gram," ")[3] as dtxt, split(gram," ")[4] as etxt, sum(freq) as tot from e5grams where year > 1800 group by gram;
+
+create table g1 as
+  select /* +MAPJOIN(ga) */ ga.id as a, tot
+    from g1t join words ga on ga.word = g1t.atxt;
+
+create table g2 as
+  select /* +MAPJOIN(ga,gb) */ ga.id as a, gb.id as b, tot
+    from g2t join words ga on ga.word = g2t.atxt
+             join words gb on gb.word = g2t.btxt;
+
+create table g3 as
+  select /* +MAPJOIN(ga,gb,gc) */ ga.id as a, gb.id as b, gc.id as c, tot
+    from g3t join words ga on ga.word = g3t.atxt
+             join words gb on gb.word = g3t.btxt
+             join words gc on gc.word = g3t.ctxt;
+
+create table g4 as
+  select /* +MAPJOIN(ga,gb,gc,gd) */ ga.id as a, gb.id as b, gc.id as c, gd.id as d, tot
+    from g4t join words ga on ga.word = g4t.atxt
+             join words gb on gb.word = g4t.btxt
+             join words gc on gc.word = g4t.ctxt
+             join words gd on gd.word = g4t.dtxt;
+
+create table g5 as
+  select /* +MAPJOIN(ga,gb,gc,gd,ge) */ ga.id as a, gb.id as b, gc.id as c, gd.id as d, ge.id as e, tot
+    from g5t join words ga on ga.word = g5t.atxt
+             join words gb on gb.word = g5t.btxt
+             join words gc on gc.word = g5t.ctxt
+             join words gd on gd.word = g5t.dtxt
+             join words ge on ge.word = g5t.etxt;
+
+--
+-- step 2. denormalization.
+--
+
+-- wget --output-document=/tmp/adaltas-hive-udf-0.0.1-SNAPSHOT.jar https://github.com/downloads/wdavidw/hive-udf/adaltas-hive-udf-0.0.1-SNAPSHOT.jar
+add jar /tmp/adaltas-hive-udf-0.0.1-SNAPSHOT.jar;
+create temporary function to_map as 'com.adaltas.UDAFToMap';
+
+create external table denorm1(a_tot map<string, string>) row format serde 'org.apache.hadoop.hive.serde2.DelimitedJSONSerDe' location "s3n://twotofive/d1";
+create external table denorm2(a int, b_tot map<string, string>) row format serde 'org.apache.hadoop.hive.serde2.DelimitedJSONSerDe' location "s3n://twotofive/d2";
+create external table denorm3(a int, b int, c_tot map<string, string>) row format serde 'org.apache.hadoop.hive.serde2.DelimitedJSONSerDe' location "s3n://twotofive/d3";
+create external table denorm4(a int, b int, c int, d_tot map<string, string>) row format serde 'org.apache.hadoop.hive.serde2.DelimitedJSONSerDe' location "s3n://twotofive/d4";
+create external table denorm5(a int, b int, c int, d int, e_tot map<string, string>) row format serde 'org.apache.hadoop.hive.serde2.DelimitedJSONSerDe' location "s3n://twotofive/d5";
+
+-- if you get OOM:
+-- set mapred.child.java.opts = -Xmx2048m;
+
+insert overwrite table denorm1 select to_map(cast(a as string), cast(tot as string)) from g1;
+insert overwrite table denorm2 select a, to_map(cast(b as string), cast(tot as string)) from g2 group by a;
+insert overwrite table denorm3 select a, b, to_map(cast(c as string), cast(tot as string)) from g3 group by a, b;
+insert overwrite table denorm4 select a, b, c, to_map(cast(d as string), cast(tot as string)) from g4 group by a, b, c;
+insert overwrite table denorm5 select a, b, c, d, to_map(cast(e as string), cast(tot as string)) from g5 group by a, b, c, d;
