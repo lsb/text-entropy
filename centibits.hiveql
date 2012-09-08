@@ -88,11 +88,11 @@ create table g5done as select g5.a, g5.b, g5.c, g5.d, g5.e, round(100 * log2(ful
 -- step 2. denormalization.
 --
 
-create external table denorm1(a int, centibits int) row format delimited fields terminated by '\t' stored as sequencefile location "s3n://twotofive/c1";
-create external table denorm2(a int, b int, centibits int) row format delimited fields terminated by '\t' stored as sequencefile location "s3n://twotofive/c2/";
-create external table denorm3(a int, b int, c int, centibits int) row format delimited fields terminated by '\t' stored as sequencefile location "s3n://twotofive/c3/";
-create external table denorm4(a int, b int, c int, d int, centibits int) row format delimited fields terminated by '\t' stored as sequencefile location "s3n://twotofive/c4/";
-create external table denorm5(a int, b int, c int, d int, e int, centibits int) row format delimited fields terminated by '\t' stored as sequencefile location "s3n://twotofive/c5/";
+create external table denorm1(a int, centibits int) row format delimited fields terminated by '|' stored as textfile location "s3n://twotofive/c1";
+create external table denorm2(a int, b int, centibits int) row format delimited fields terminated by '|' stored as textfile location "s3n://twotofive/c2/";
+create external table denorm3(a int, b int, c int, centibits int) row format delimited fields terminated by '|' stored as textfile location "s3n://twotofive/c3/";
+create external table denorm4(a int, b int, c int, d int, centibits int) row format delimited fields terminated by '|' stored as textfile location "s3n://twotofive/c4/";
+create external table denorm5(a int, b int, c int, d int, e int, centibits int) row format delimited fields terminated by '|' stored as textfile location "s3n://twotofive/c5/";
 
 insert overwrite table denorm1 select * from g1done;
 insert overwrite table denorm2 select * from g2done;
