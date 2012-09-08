@@ -1,0 +1,101 @@
+--
+-- step 1. histogram of words.
+--
+
+create temporary function rowSequence as 'org.apache.hadoop.hive.contrib.udf.UDFRowSequence';
+set hive.auto.convert.join=true; -- convert joins as necessary
+set hive.exec.mode.local.auto=true; -- move small jobs to the master node
+
+-- as of August 2012, the first created table (in a Hive EMR session, at least) can't be a "create table as".
+create table tmp (x int);
+
+-- as per http://aws.amazon.com/articles/5249664154115844
+create external table e1grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/1gram/';
+create external table e2grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/2gram/';
+create external table e3grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/3gram/';
+create external table e4grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/4gram/';
+create external table e5grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/5gram/';
+
+-- create table grams as select g as word, count(*) as freq from (select gram as g from e1grams union all select explode(split(gram," ")) as g from e2grams union all select explode(split(gram," ")) as g from e3grams union all select explode(split(gram," ")) as g from e4grams union all select explode(split(gram," ")) as g from e5grams) x group by g;
+
+-- create table topgrams as select * from grams order by freq desc limit 500000;
+
+-- create table words as select word, rowSequence() as id from topgrams;  -- ensure this runs on 1 node only.
+
+create external table words (word string, id int) location 's3://www.leebutterman.com/words';
+
+create view g1t as select gram as atxt, sum(freq) as tot from e1grams where year > 1800 group by gram;
+create view g2t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, sum(freq) as tot from e2grams where year > 1800 group by gram;
+create view g3t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, split(gram," ")[2] as ctxt, sum(freq) as tot from e3grams where year > 1800 group by gram;
+create view g4t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, split(gram," ")[2] as ctxt, split(gram," ")[3] as dtxt, sum(freq) as tot from e4grams where year > 1800 group by gram;
+create view g5t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, split(gram," ")[2] as ctxt, split(gram," ")[3] as dtxt, split(gram," ")[4] as etxt, sum(freq) as tot from e5grams where year > 1800 group by gram;
+
+create table g1 as
+  select /* +MAPJOIN(ga) */ ga.id as a, tot
+    from g1t join words ga on ga.word = g1t.atxt;
+
+create view g1full as select sum(tot) as full_total from g1;
+
+create table g1done as select g1.a, round(100 * log2(full_total / tot)) as centibits from g1 join g1full order by a;
+
+
+create table g2 as
+  select /* +MAPJOIN(ga,gb) */ ga.id as a, gb.id as b, tot
+    from g2t join words ga on ga.word = g2t.atxt
+             join words gb on gb.word = g2t.btxt;
+
+create view g2full as select a, sum(tot) as full_total from g2 group by a;
+
+create table g2done as select g2.a, g2.b, round(100 * log2(full_total / tot)) as centibits from g2 join g2full on g2.a = g2full.a order by a, b;
+
+
+create table g3 as
+  select /* +MAPJOIN(ga,gb,gc) */ ga.id as a, gb.id as b, gc.id as c, tot
+    from g3t join words ga on ga.word = g3t.atxt
+             join words gb on gb.word = g3t.btxt
+             join words gc on gc.word = g3t.ctxt;
+
+create view g3full as select a, b, sum(tot) as full_total from g3 group by a, b;
+
+create table g3done as select g3.a, g3.b, g3.c, round(100 * log2(full_total / tot)) as centibits from g3 join g3full on g3.a = g3full.a and g3.b = g3full.b order by a, b, c;
+
+
+create table g4 as
+  select /* +MAPJOIN(ga,gb,gc,gd) */ ga.id as a, gb.id as b, gc.id as c, gd.id as d, tot
+    from g4t join words ga on ga.word = g4t.atxt
+             join words gb on gb.word = g4t.btxt
+             join words gc on gc.word = g4t.ctxt
+             join words gd on gd.word = g4t.dtxt;
+
+create view g4full as select a, b, c, sum(tot) as full_total from g4 group by a, b, c;
+
+create table g4done as select g4.a, g4.b, g4.c, g4.d, round(100 * log2(full_total / tot)) as centibits from g4 join g4full on g4.a = g4full.a and g4.b = g4full.b and g4.c = g4full.c order by a, b, c, d;
+
+
+create table g5 as
+  select /* +MAPJOIN(ga,gb,gc,gd,ge) */ ga.id as a, gb.id as b, gc.id as c, gd.id as d, ge.id as e, tot
+    from g5t join words ga on ga.word = g5t.atxt
+             join words gb on gb.word = g5t.btxt
+             join words gc on gc.word = g5t.ctxt
+             join words gd on gd.word = g5t.dtxt
+             join words ge on ge.word = g5t.etxt;
+
+create view g5full as select a, b, c, d, sum(tot) as full_total from g5 group by a, b, c, d;
+
+create table g5done as select g5.a, g5.b, g5.c, g5.d, g5.e, round(100 * log2(full_total / tot)) as centibits from g5 join g5full on g5.a = g5full.a and g5.b = g5full.b and g5.c = g5full.c and g5.d = g5full.d order by a, b, c, d, e;
+
+--
+-- step 2. denormalization.
+--
+
+create external table denorm1(a int, centibits int) row format delimited fields terminated by '\t' stored as sequencefile location "s3n://twotofive/c1";
+create external table denorm2(a int, b int, centibits int) row format delimited fields terminated by '\t' stored as sequencefile location "s3n://twotofive/c2/";
+create external table denorm3(a int, b int, c int, centibits int) row format delimited fields terminated by '\t' stored as sequencefile location "s3n://twotofive/c3/";
+create external table denorm4(a int, b int, c int, d int, centibits int) row format delimited fields terminated by '\t' stored as sequencefile location "s3n://twotofive/c4/";
+create external table denorm5(a int, b int, c int, d int, e int, centibits int) row format delimited fields terminated by '\t' stored as sequencefile location "s3n://twotofive/c5/";
+
+insert overwrite table denorm1 select * from g1done;
+insert overwrite table denorm2 select * from g2done;
+insert overwrite table denorm3 select * from g3done;
+insert overwrite table denorm4 select * from g4done;
+insert overwrite table denorm5 select * from g5done;
