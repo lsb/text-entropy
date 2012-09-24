@@ -1,0 +1,91 @@
+--
+-- step 1. histogram of words.
+--
+
+create temporary function rowSequence as 'org.apache.hadoop.hive.contrib.udf.UDFRowSequence';
+set hive.auto.convert.join=true; -- convert joins as necessary
+set hive.exec.mode.local.auto=true; -- move small jobs to the master node
+
+-- as of August 2012, the first created table (in a Hive EMR session, at least) can't be a "create table as".
+create table tmp (x int);
+
+-- as per http://aws.amazon.com/articles/5249664154115844
+create external table e1grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/1gram/';
+create external table e2grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/2gram/';
+create external table e3grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/3gram/';
+create external table e4grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/4gram/';
+create external table e5grams (gram string, year int, freq int, pagefreq int, bookfreq int) row format delimited fields terminated by '\t' stored as sequencefile location 's3://datasets.elasticmapreduce/ngrams/books/20090715/eng-all/5gram/';
+
+create table grams as select g as word, count(*) as freq from (select gram as g from e1grams union all select explode(split(gram," ")) as g from e2grams union all select explode(split(gram," ")) as g from e3grams union all select explode(split(gram," ")) as g from e4grams union all select explode(split(gram," ")) as g from e5grams) x group by g;
+
+create table topgrams as select * from grams order by freq desc limit 500000;
+
+create table words as select word, rowSequence() as id from topgrams;  -- ensure this runs on 1 node only.
+
+-- or create external table words (word string, id int) location 's3://www.leebutterman.com/words';
+
+create view g1t as select gram as atxt, sum(freq) as tot from e1grams where year > 1800 group by gram;
+create view g2t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, sum(freq) as tot from e2grams where year > 1800 group by gram;
+create view g3t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, split(gram," ")[2] as ctxt, sum(freq) as tot from e3grams where year > 1800 group by gram;
+create view g4t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, split(gram," ")[2] as ctxt, split(gram," ")[3] as dtxt, sum(freq) as tot from e4grams where year > 1800 group by gram;
+create view g5t as select split(gram," ")[0] as atxt, split(gram," ")[1] as btxt, split(gram," ")[2] as ctxt, split(gram," ")[3] as dtxt, split(gram," ")[4] as etxt, sum(freq) as tot from e5grams where year > 1800 group by gram;
+
+create table g1 as
+  select /* +MAPJOIN(ga) */ ga.id as a, tot
+    from g1t join words ga on ga.word = g1t.atxt;
+
+create table g2 as
+  select /* +MAPJOIN(ga,gb) */ ga.id as a, gb.id as b, tot
+    from g2t join words ga on ga.word = g2t.atxt
+             join words gb on gb.word = g2t.btxt;
+
+create table g3 as
+  select /* +MAPJOIN(ga,gb,gc) */ ga.id as a, gb.id as b, gc.id as c, tot
+    from g3t join words ga on ga.word = g3t.atxt
+             join words gb on gb.word = g3t.btxt
+             join words gc on gc.word = g3t.ctxt;
+
+create table g4 as
+  select /* +MAPJOIN(ga,gb,gc,gd) */ ga.id as a, gb.id as b, gc.id as c, gd.id as d, tot
+    from g4t join words ga on ga.word = g4t.atxt
+             join words gb on gb.word = g4t.btxt
+             join words gc on gc.word = g4t.ctxt
+             join words gd on gd.word = g4t.dtxt;
+
+create table g5 as
+  select /* +MAPJOIN(ga,gb,gc,gd,ge) */ ga.id as a, gb.id as b, gc.id as c, gd.id as d, ge.id as e, tot
+    from g5t join words ga on ga.word = g5t.atxt
+             join words gb on gb.word = g5t.btxt
+             join words gc on gc.word = g5t.ctxt
+             join words gd on gd.word = g5t.dtxt
+             join words ge on ge.word = g5t.etxt;
+
+--
+-- step 2. denormalization.
+--
+
+create external table g1iel(a int) row format delimited fields terminated by ',' stored as textfile location "s3n://twotofive/g1iel"; -- (i)mportant (e)ntropy (l)osses
+create external table g2iel(a int, b int) row format delimited fields terminated by ',' stored as textfile location "s3n://twotofive/g1iel";
+create external table g3iel(a int, b int, c int) row format delimited fields terminated by ',' stored as textfile location "s3n://twotofive/g1iel";
+
+create table g1globaltotal(g1global int);
+insert into g1globaltotal select sum(tot) from g1b;
+
+create table g2globaltotal(g2global int);
+insert into g2globaltotal select sum(tot) from g2b;
+
+create table g3globaltotal(g3global int);
+insert into g3globaltotal select sum(tot) from g3b;
+
+create table g1prob as select g1.a, 1.0 / (g1.tot * 1.0 / g1global) as invprob from g1 join g1globaltotal;
+
+insert overwrite table g1iel select g1prob.a from g1prob where invprob < 1024;
+
+create table g2prob as select g2.a, g2.b, (g1.tot * 1.0 / g1global) / (g2.tot * 1.0 / g2global) as invprob from g2 join g1 on g2.a = g1.a join g1globaltotal join g2globaltotal;
+
+insert overwrite table g2iel select g2prob.a, g2prob.b from g2prob left join g1iel on g2prob.b = g1iel.a where g1iel.a is null and g2prob.invprob < 256;
+
+create table g3prob as select g3.a, g3.b, g3.c, (g2.tot * 1.0 / g2global) / (g3.tot * 1.0 / g3global) as invprob from g3 join g2 on g3.b = g2.b and g3.a = g3.a join g2globaltotal join g3globaltotal;
+
+insert overwrite table g3iel select g3prob.a, g3prob.b, g3prob.c from g3prob left join g2iel on g2iel.a = g3prob.b and g2iel.b = g3prob.c left join g1iel on g1iel.a = g3prob.c where g2iel.a is null and g1iel.a is null and g3prob.invprob < 256;
+
